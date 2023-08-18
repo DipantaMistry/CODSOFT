@@ -1,0 +1,1208 @@
+---
+title: "Credit Card Fraud Detection"
+author: "Dipanta"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+
+# Problem statement
+- Banks have a big issue with credit card fraud, where people try to cheat by using fake transactions. So, we want to create a computer program that can look at past customer transactions and figure out if they're fake or real.
+
+- we'll show the bank people how much money the program could save them and give them ideas on how to stop the cheating.
+
+## Understanding the data set
+
+```{r message=FALSE, warning=FALSE}
+#importing the packages
+
+library(tidyverse)
+library(knitr)
+library(gridExtra)
+library(corrplot)
+library(caTools)
+library(caret)
+library(e1071)
+library(ROCR)
+library(ROSE)
+```
+
+
+```{r warning=FALSE}
+#Loading the data set
+
+data1= read.csv("C:/Users/DIPANTA MISTRY/OneDrive/Documents/R_dataset/fraudTrain.csv")
+data2 = read.csv("C:/Users/DIPANTA MISTRY/OneDrive/Documents/R_dataset/fraudTest.csv")
+
+#combining both data sets
+
+df = rbind(data1,data2)
+glimpse(df)
+```
+
+
+# Data Preprocessing
+
+```{r}
+#Converting trans_date_trans_time as date time
+df$trans_date_trans_time= as_datetime(df$trans_date_trans_time)
+```
+
+- Lets check the data balance in your data set for target variable, 'is_fraud'.
+
+```{r}
+unique_counts= sapply(df, function(col) length(unique(col)))
+print(unique_counts)
+```
+
+
+- Splitting the trans_date_trans_time column and making different column say hour, day, month-year to get more valuable information.
+
+```{r}
+#making hour col
+df$trans_hour = hour(df$trans_date_trans_time)
+
+#making weeks days column
+df$trans_day_of_week = weekdays(df$trans_date_trans_time)
+
+#making year_month column
+df$trans_year_month = format(df$trans_date_trans_time, '%y-%m')
+
+glimpse(df)
+```
+
+- Let us find the age of the customer
+
+```{r}
+#converting dob col as date
+
+df$dob = as.Date(df$dob)
+
+# Calculate age based on date of birth
+df$age = year(df$trans_date_trans_time) - year(df$dob)
+
+glimpse(df)
+
+```
+
+- Now we can remove unneccessary columns
+
+```{r}
+#Removing cols
+df = df %>% 
+  select(-trans_date_trans_time,-first,-last,-dob)
+```
+
+- Now the data set has only needed info, now we can proceed with other process
+
+```{r}
+#Take a look
+summary(df)
+```
+
+- From the above summarization we can see that there is no missing value in our dataset.
+
+
+```{r}
+#Store a copy
+df_copy = df
+```
+
+
+
+# Explaratory Data Analysis
+
+- Let us check the percentage of fraud transaction
+
+```{r}
+value=table(df$is_fraud)
+print(prop.table(value)*100)
+```
+
+- From the above section we can clearly see the presence of data imbalance. So we have to balance the data to avoid any biases.
+
+### Exploring the Amount data
+
+- overall summary
+```{r}
+summary(df$amt)
+```
+
+- Non-fraud transaction summary
+```{r}
+summary(df$amt[df$is_fraud==0])
+```
+
+- Fraud transaction summary
+```{r}
+summary(df$amt[df$is_fraud==1])
+```
+
+- From the above analysis we can see that the mean transaction in fraud case is high compare to non-fraud case.
+
+
+#### Plot the above distribution
+
+
+```{r fig.align='center'}
+# Create a list to store plots
+plots = list()
+
+# Create a boxplot
+plots[[1]] = ggplot(df, aes(x = 1, y = amt)) +
+  geom_boxplot() +
+  labs(x = NULL, y = "Transaction Amount") +
+  theme_void()
+
+# Create distribution plots
+plots[[2]] = ggplot(df[df$amt <= 1500, ], aes(x = amt)) +
+  geom_histogram(binwidth = 50, fill = "blue") +
+  labs(title = "Overall Amount Distribution",
+       x = "Transaction Amount",
+       y = "Number of Transactions") +
+  theme_minimal()
+
+plots[[3]] = ggplot(subset(df, is_fraud == 0 & amt <= 1500), aes(x = amt)) +
+  geom_histogram(binwidth = 50, fill = "green") +
+  labs(title = "Non-Fraud Amount Distribution",
+       x = "Transaction Amount",
+       y = "Number of Transactions") +
+  theme_minimal()
+
+plots[[4]] = ggplot(subset(df, is_fraud == 1 & amt <= 1500), aes(x = amt)) +
+  geom_histogram(binwidth = 50, fill = "red") +
+  labs(title = "Fraud Amount Distribution",
+       x = "Transaction Amount",
+       y = "Number of Transactions") +
+  theme_minimal()
+
+# Arrange and print the plots
+
+grid.arrange(grobs = plots, ncol = 2, nrow = 2)
+```
+
+
+- From the above plots we can see that: The 'amt' feature has lots of outliers in the data. The distribution of the overall amount is and non fraud amount is similar. The skewness of the data distribution can be seen.
+
+
+### Exploring the Time data
+
+```{r}
+
+
+
+# Plotting 'trans_hour' feature
+plot_trans_hour = ggplot(df, aes(x = trans_hour)) +
+  geom_bar(fill = "blue") +
+  labs(title = "Transaction Hour",
+       x = "Hour",
+       y = "Number of Transactions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plotting 'trans_day_of_week' feature
+plot_trans_day = ggplot(df, aes(x = trans_day_of_week)) +
+  geom_bar(fill = "green") +
+  labs(title = "Transaction Day of Week",
+       x = "Day of Week",
+       y = "Number of Transactions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plotting 'trans_year_month' feature
+plot_trans_year_month = ggplot(df, aes(x = trans_year_month)) +
+  geom_bar(fill = "red") +
+  labs(title = "Transaction Year-Month",
+       x = "Year-Month",
+       y = "Number of Transactions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Arrange and print the plots
+grid.arrange(plot_trans_hour, plot_trans_day, plot_trans_year_month, ncol = 2, nrow = 2)
+
+```
+
+
+```{r}
+# Group by 'trans_year_month' and calculate number of unique transactions and customers
+df_timeline01 = df %>%
+  group_by(trans_year_month) %>%
+  summarise(num_of_transactions = n_distinct(trans_num),
+            customers = n_distinct(cc_num)) %>%
+  ungroup() %>%
+  rename(year_month = trans_year_month)
+```
+
+- Now plot the above distribution
+
+```{r}
+# Create a sequence for x-axis
+x = seq(1, nrow(df_timeline01), 1)
+
+# Create the plot using ggplot
+ggplot(df_timeline01, aes(x = x, y = num_of_transactions)) +
+  geom_line() +
+  scale_x_continuous(breaks = x, labels = df_timeline01$year_month) +
+  labs(title = "Number of Transactions Over Time",
+       x = "Year Month",
+       y = "Num of Transactions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+- year_month vs fraud customers and fraud transaction
+```{r}
+# Filter for fraud transactions
+df_fraud_transactions = df %>%
+  filter(is_fraud == 1)
+
+# Group by 'trans_year_month' for fraud transactions and calculate number of unique transactions and customers
+df_timeline02 = df_fraud_transactions %>%
+  group_by(trans_year_month) %>%
+  summarise(num_of_fraud_transactions = n_distinct(trans_num),
+            fraud_customers = n_distinct(cc_num)) %>%
+  ungroup() %>%
+  rename(year_month = trans_year_month)
+```
+
+- Now plot the above distribution
+```{r}
+# Create a sequence for x-axis
+x = seq(1, nrow(df_timeline02), 1)
+
+# Create the plot using ggplot
+ggplot(df_timeline02, aes(x = x, y = fraud_customers)) +
+  geom_line() +
+  scale_x_continuous(breaks = x, labels = df_timeline02$year_month) +
+  labs(title = "Number of Fraud Customers Over Time",
+       x = "Year Month",
+       y = "Number of Fraud Customers") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+- From the above graphs it can be seen that the most of the transaction happen after the noon. So, security can be increased at that time.
+- Also the overall transaction and the fraud transaction is increased during the 12 month, i.e, in the December. so such times can be watched closely.
+- Also in the holidays people mostly uses their cards. So Surveilance can be increased on those days.
+
+
+### Exploring Gender data
+
+```{r fig.align='center'}
+
+# Plotting gender demographic
+ggplot(df, aes(x = gender)) +
+  geom_bar(fill = "blue") +
+  labs(title = "Gender Demographic",
+       x = "Gender",
+       y = "Number of Customers") +
+  theme_minimal()
+```
+
+```{r fig.align='center'}
+# Plotting transactions over time with respect to gender
+ggplot(df, aes(x = trans_hour, fill = gender)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Transactions Over Time by Gender",
+       x = "Transaction Hour",
+       y = "Number of Transactions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r fig.align='center'}
+ggplot(df, aes(x = trans_day_of_week, fill = gender)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Transactions Over Days of Week by Gender",
+       x = "Day of Week",
+       y = "Number of Transactions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r fig.align='center'}
+ggplot(df, aes(x = trans_year_month, fill = gender)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Transactions Over Year-Month by Gender",
+       x = "Year-Month",
+       y = "Number of Transactions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+```
+```{r}
+# Create the 'gender' distributed data frame
+df_gender = df %>%
+  group_by(gender) %>%
+  summarise(gender_count = n()) %>%
+  ungroup() %>%
+  rename(Gender = gender)
+
+# Create the gender-fraud distribution data frame
+df_fraud_gender = df %>%
+  group_by(gender, is_fraud) %>%
+  summarise(Transaction_Count = n()) %>%
+  ungroup() %>%
+  rename(Gender = gender, Is_Fraud = is_fraud)
+
+# Merge the data frames
+df_fraud_gender = df_fraud_gender %>%
+  left_join(df_gender, by = "Gender") %>%
+  mutate(Transaction_Percentage = (Transaction_Count / gender_count) * 100)
+
+head(df_fraud_gender)
+```
+
+
+```{r fig.align='center'}
+# Create the bar plot using ggplot
+ggplot(df_fraud_gender, aes(x = Gender, y = Transaction_Count, fill = factor(Is_Fraud))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Transaction Count by Gender and Fraud Status",
+       x = "Gender",
+       y = "Transaction Count",
+       fill = "Is Fraud") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red"), labels = c("0" = "Non-Fraud", "1" = "Fraud")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+- women are involved in most of the transactions and hence, they be more prone to frauds.
+
+- Therefore, while there is a need for all sexes in the data to be knowledgeable about the frauds and their methods happening due to credit cards, in order to reduce the amount of frauds women should be educated and trained to be a bit more vigilant since they are much more prone to frauds.
+
+- It can be concluded that men are a bit more inclined to be involved in fraud although both the sexes appear to be almost equally involved in all fraudulent transactions
+
+
+### Exploring age data
+
+```{r}
+# Create a new column for age bins
+df = df %>%
+  mutate(age_bin = case_when(
+    age <= 30 ~ "< 30",
+    age > 30 & age <= 45 ~ "30-45",
+    age > 45 & age <= 60 ~ "46-60",
+    age > 60 & age <= 75 ~ "61-75",
+    TRUE ~ "> 75"
+  ))
+```
+
+```{r}
+head(df$age_bin)
+```
+
+```{r fig.align='center'}
+# Create the count plot using ggplot
+ggplot(df, aes(x = age_bin)) +
+  geom_bar(fill = "blue") +
+  labs(title = "Age Distribution",
+       x = "Age Bin",
+       y = "Number of Customers") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+
+# Create the age-transaction count distribution data frame
+df_age = df %>%
+  group_by(age_bin) %>%
+  summarise(age_count = n()) %>%
+  ungroup()
+
+# Create the age-fraud distribution data frame
+df_fraud_age = df %>%
+  group_by(age_bin, is_fraud) %>%
+  summarise(Transaction_Count = n()) %>%
+  ungroup()
+
+# Merge the data frames
+df_fraud_age = df_fraud_age %>%
+  left_join(df_age, by = "age_bin") %>%
+  mutate(Transaction_Percentage = (Transaction_Count / age_count) * 100)
+
+head(df_fraud_age)
+
+```
+
+```{r  fig.align='center'}
+ggplot(df_fraud_age, aes(x = age_bin, y = Transaction_Count, fill = factor(is_fraud))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Transaction Count by Age and Fraud Status",
+       x = "Age",
+       y = "Transaction Count",
+       fill = "Is Fraud") +
+  scale_fill_manual(values = c("0" = "blue", "1" = "red"), labels = c("0" = "Non-Fraud", "1" = "Fraud")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45))
+
+```
+
+
+### Explore state data
+
+```{r}
+length(unique(df$state))
+```
+```{r}
+names(head(sort(table(df$state), decreasing = TRUE), 20))
+```
+```{r}
+# Fetch the top 20 states with the highest transaction frequency
+high_trans_states = names(head(sort(table(df$state), decreasing = TRUE), 20))
+
+# Calculate the percentage distribution
+percentage_distribution = prop.table(table(df$state[df$state %in% high_trans_states])) * 100
+
+# Print the percentage distribution
+print(percentage_distribution)
+```
+
+```{r}
+# Create the count plot using ggplot
+ggplot(df, aes(x = state)) +
+  geom_bar(fill = "blue") +
+  labs(title = "State Distribution",
+       x = "State",
+       y = "Number of Customers") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+```{r}
+# Create the state-transaction count distribution data frame
+df_state = df %>%
+  group_by(state) %>%
+  summarise(state_count = n()) %>%
+  ungroup()
+
+# Create the state-fraud distribution data frame
+df_fraud_state = df %>%
+  group_by(state, is_fraud) %>%
+  summarise(Transaction_Count = n()) %>%
+  ungroup()
+
+# Merge the data frames
+df_fraud_state = df_fraud_state %>%
+  left_join(df_state, by = "state") %>%
+  mutate(Transaction_Percentage = (Transaction_Count / state_count) * 100)
+
+# View the top 20 states with high fraudulent transactions
+top_fraud_states = df_fraud_state %>%
+  filter(is_fraud == 1) %>%
+  arrange(desc(Transaction_Percentage)) %>%
+  head(20)
+
+# Print the resulting data frame
+head(top_fraud_states)
+
+```
+
+```{r}
+# Filter the data for fraudulent transactions
+fraudulent_data = df_fraud_state %>%
+  filter(is_fraud == 1)
+
+# Create the count plot using ggplot
+ggplot(fraudulent_data, aes(x = cut(Transaction_Percentage, breaks = 5))) +
+  geom_bar(fill = "blue") +
+  labs(title = "Fraudulent Transactions Percentage Distribution",
+       x = "Fraudulent Transactions Percentage",
+       y = "Number of States") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+```{r}
+# Filter and print states with more than 75% fraudulent transactions
+fraudulent_states = df_fraud_state %>%
+  filter(is_fraud == 1, Transaction_Percentage >= 75) %>%
+  select(state)
+
+# Print the list of states
+cat("States with more than 75% fraudulent transactions:\n")
+print(fraudulent_states$state)
+```
+
+
+- In view of the above observations, it can be concluded that in order to reduce the number of fraudulent transactions overall, it is necessary that the monitoring of transactions in areas where in the most number of transaction must be increased.
+
+
+### Exploring city and zip
+
+```{r}
+# Print the number of unique cities and zip codes
+cat("Number of cities:", length(unique(df$city)), "\n")
+cat("Number of zip codes:", length(unique(df$zip)), "\n")
+```
+```{r}
+# Fetch the top 20 high-frequency cities and zip codes
+high_trans_cities = names(head(sort(table(df$city), decreasing = TRUE), 20))
+high_trans_zips = names(head(sort(table(df$zip), decreasing = TRUE), 20))
+
+# Print the high-frequency cities and zip codes
+cat("High-frequency cities:", paste(high_trans_cities, collapse = ", "), "\n")
+cat("High-frequency zip codes:", paste(high_trans_zips, collapse = ", "), "\n")
+
+```
+
+
+```{r fig.align='center'}
+# Filter the data for high-frequency cities 
+high_freq_cities_data = df %>%
+  filter(city %in% high_trans_cities)
+
+
+
+# Create the plots using ggplot
+ggplot(high_freq_cities_data, aes(x = city)) +
+  geom_bar(fill = "blue") +
+  labs(title = "Transaction Frequency in High-Frequency Cities",
+       x = "City",
+       y = "Transaction Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r fig.align='center'}
+# Filter the data for high-frequency  zips
+
+high_freq_zips_data = df %>%
+  filter(zip %in% high_trans_zips)
+
+# Create the plots using ggplot
+ggplot(high_freq_zips_data, aes(x = zip)) +
+  geom_bar(fill = "blue") +
+  labs(title = "Transaction Frequency in High-Frequency Zip Codes",
+       x = "Zip Code",
+       y = "Transaction Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+
+```
+
+```{r}
+# Create the city-transaction count distribution data frame
+df_city = df %>%
+  group_by(city) %>%
+  summarise(city_count = n()) %>%
+  ungroup()
+
+# Create the city-fraud distribution data frame
+df_fraud_city = df %>%
+  group_by(city, is_fraud) %>%
+  summarise(Transaction_Count = n()) %>%
+  ungroup()
+
+# Merge the data frames
+df_fraud_city = df_fraud_city %>%
+  left_join(df_city, by = "city") %>%
+  mutate(Transaction_Percentage = (Transaction_Count / city_count) * 100)
+
+# View the top 20 cities with high fraudulent transaction volumes
+top_fraud_cities = df_fraud_city %>%
+  filter(is_fraud == 1) %>%
+  arrange(desc(Transaction_Percentage)) %>%
+  head(20)
+
+# Print the resulting data frame
+print(top_fraud_cities)
+```
+
+```{r}
+# Create the zip-transaction count distribution data frame
+df_zip = df %>%
+  group_by(zip) %>%
+  summarise(zip_count = n()) %>%
+  ungroup()
+
+# Create the zip-fraud distribution data frame
+df_fraud_zip = df %>%
+  group_by(zip, is_fraud) %>%
+  summarise(Transaction_Count = n()) %>%
+  ungroup()
+
+# Merge the data frames
+df_fraud_zip = df_fraud_zip %>%
+  left_join(df_zip, by = "zip") %>%
+  mutate(Transaction_Percentage = (Transaction_Count / zip_count) * 100)
+
+# View the top 20 zip codes with high fraudulent transaction volumes
+top_fraud_zips = df_fraud_zip %>%
+  filter(is_fraud == 1) %>%
+  arrange(desc(Transaction_Percentage)) %>%
+  head(20)
+
+# Print the resulting data frame
+print(top_fraud_zips)
+```
+### Exploring job feature
+
+```{r}
+cat("Number of unique job values:",length(unique(df$job)),"\n")
+
+high_trans_jobs <- names(head(sort(table(df$job), decreasing = TRUE), 20))
+cat("Top 20 jobs with high transaction frequencies:", names(head(sort(table(df$job), decreasing = TRUE), 20)),"\n")
+
+```
+```{r fig.align='center'}
+# Create the plot using ggplot
+ggplot(subset(df, job %in% high_trans_jobs), aes(x = job)) +
+  geom_bar() +
+  labs(title = "Transaction Counts in Top 20 Jobs",
+       x = "Job",
+       y = "Transaction Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+```{r}
+# Constructing the job-transaction count distribution
+df_job = aggregate(trans_num ~ job, data = df, FUN = length)
+names(df_job) <- c('job', 'job_count')
+
+# Creating the job-fraud distribution
+df_fraud_job = aggregate(trans_num ~ job + is_fraud, data = df, FUN = length)
+names(df_fraud_job) = c('job', 'is_fraud', 'Transaction_count')
+
+# Merging with job counts
+df_fraud_job = merge(df_fraud_job, df_job, by = 'job')
+
+# Calculating Transaction percentage
+df_fraud_job$Transaction_percentage <- (df_fraud_job$Transaction_count / df_fraud_job$job_count) * 100
+
+# Viewing the top 20 jobs with high fraudulent transaction volumes
+top_fraud_jobs = subset(df_fraud_job, is_fraud == 1)
+top_fraud_jobs = top_fraud_jobs[order(-top_fraud_jobs$Transaction_percentage), ]
+head(top_fraud_jobs, 20)
+
+
+
+```
+
+
+```{r fig.align='center', warning=FALSE}
+
+# Filter the data for only fraudulent transactions
+df_fraud_job = subset(df_fraud_job, is_fraud == 1)
+
+# Create the plot using ggplot
+ggplot(df_fraud_job, aes(x = cut(`Transaction_percentage`, breaks = 2), fill = `Transaction_percentage`)) +
+  geom_bar(stat = "count") +
+  labs(title = "Fraudulent Transactions Percentage Binning",
+       x = "Transaction Percentage Bin",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+
+```
+
+
+```{r}
+# Filter and print jobs with more than 50% fraudulent transactions
+fraudulent_jobs = df_fraud_job %>%
+  filter(is_fraud == 1, `Transaction_percentage` >= 50) %>%
+  select(job)
+
+# Print the list of jobs
+cat("Jobs with more than 50% fraudulent transactions:\n")
+print(fraudulent_jobs$job)
+```
+
+### Exploring Category feature
+
+```{r}
+prop.table(table(df$category))
+```
+
+```{r fig.align='center'}
+# Create the plot using ggplot
+ggplot(df, aes(x = category)) +
+  geom_bar() +
+  labs(title = "Category Wise Transaction Counts",
+       x = "Category",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r fig.align='center'}
+# Create the plot using ggplot
+ggplot(df, aes(x = category, fill = factor(is_fraud))) +
+  geom_bar(position = "dodge") +
+  labs(title = "Category Wise Transaction Counts (Fraud vs. Non-Fraud)",
+       x = "Category",
+       y = "Count") +
+  scale_fill_discrete(name = "Fraud",
+                      labels = c("Non-Fraud", "Fraud")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+```{r}
+# Constructing the category-transaction count distribution
+df_category = df %>%
+  group_by(category) %>%
+  summarize(category_count = n()) %>%
+  ungroup()
+
+# Creating the category-fraud distribution
+df_fraud_category = df %>%
+  group_by(category, is_fraud) %>%
+  summarize(`Transaction count` = n()) %>%
+  ungroup() %>%
+  left_join(df_category, by = "category") %>%
+  mutate(`Transaction percentage` = (`Transaction count` / category_count) * 100)
+
+# Viewing the top categories with high fraudulent transaction volumes
+df_fraud_category %>%
+  filter(is_fraud == 1) %>%
+  arrange(desc(`Transaction percentage`)) %>%
+  head()
+```
+
+
+```{r  fig.align='center'}
+# Create the plot using ggplot
+ggplot(df_fraud_category[df_fraud_category$is_fraud == 1, ], aes(x = `Transaction percentage`)) +
+  geom_histogram(bins = 2) +
+  labs(title = "Fraudulent Transactions Percentage Distribution",
+       x = "Transaction Percentage",
+       y = "Count") +
+  theme_minimal()
+```
+
+
+
+```{r}
+# Filter and print categories with more than one percent fraudulent transactions
+fraudulent_categories = df_fraud_category %>%
+  filter(is_fraud == 1, `Transaction percentage` >= 1) %>%
+  select(category)
+
+# Print the list of categories
+cat("Categories with more than 1% fraudulent transactions:\n")
+print(fraudulent_categories$category)
+```
+
+
+### Exploring Merchant feature
+
+```{r}
+length(unique(df$merchant))
+```
+
+```{r}
+# Get the top 20 high transaction merchants
+high_trans_merchants = names(head(sort(table(df$merchant), decreasing = TRUE), 20))
+
+# Print the list of high transaction merchants
+cat("High transaction merchants:\n")
+print(high_trans_merchants)
+```
+
+
+```{r}
+
+ggplot(df[df$merchant %in% high_trans_merchants, ], aes(x = merchant)) +
+  geom_bar() +
+  labs(title = "Top Merchants with High Transaction Volumes",
+       x = "Merchant",
+       y = "Transaction Count") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+**Now, as we done with the EDA, we will move to the feature encoding** 
+
+
+# Feature Encoding
+
+- One hot encoding
+```{r}
+
+# One-hot encode the category variable
+category_onehot = model.matrix(~0 + category, data = df)
+
+# Rename the columns
+colnames(category_onehot) = gsub("category", "category_", colnames(category_onehot))
+
+# Remove the intercept column
+category_onehot = category_onehot[, -1]
+
+# One-hot encode the gender variable
+gender_onehot = model.matrix(~0 + gender, data = df)
+colnames(gender_onehot) <- gsub("gender", "gender_", colnames(gender_onehot))
+gender_onehot = gender_onehot[, -1]
+
+# One-hot encode the day_of_week variable
+day_of_week_onehot = model.matrix(~0 + trans_day_of_week, data = df)
+colnames(day_of_week_onehot) = gsub("trans_day_of_week", "day_", colnames(day_of_week_onehot))
+day_of_week_onehot = day_of_week_onehot[, -1]
+```
+
+```{r}
+# One-hot encode the age variable
+age_onehot = model.matrix(~0 + age, data = df)
+colnames(age_onehot) = gsub("age", "age_", colnames(age_onehot))
+age_onehot = age_onehot[, -1]
+
+```
+
+
+```{r}
+# Combine the one-hot encoded matrices with the original data frame
+df1 = cbind(df, category_onehot, gender_onehot, day_of_week_onehot, age_onehot)
+head(df1)
+
+```
+
+```{r}
+# Drop specified columns
+df1 = df1 %>%
+  select(-cc_num, -trans_num)
+
+# Print the dimensions of the data frame
+print(dim(df1))
+
+# Print the column names
+print(names(df1))
+```
+
+- In the above df1 Data frame, the feature 'merchant' can be dropped since it has lot of unique values and it is hard to encode all of them. And the same applies to the variables - 'street', 'city', 'state' and 'job'
+
+- Similarly, the variables - 'age', 'category', 'gender', 'trans_day_of_week' can also be dropped since they have already been encoded.
+
+```{r}
+# Drop specified columns
+df1 = df1 %>%
+  select(-merchant, -street, -city, -state, -job,
+         -category, -gender, -trans_day_of_week, -age)
+
+# Print the column names
+print(names(df1))
+
+```
+```{r}
+# Drop specified columns
+df1 = df1 %>%
+  select(-X)
+```
+
+
+```{r}
+# Select only the numeric columns for correlation calculation
+numeric_cols = sapply(df1, is.numeric)
+df_numeric = df1[, numeric_cols]
+
+# Calculate the correlations
+df_random_under_corr = cor(df_numeric)
+
+# Plotting the correlation heatmap
+corrplot(df_random_under_corr, method="color", type=c("full", "lower", "upper"), tl.col="black", tl.srt=45)
+
+```
+
+
+- Now, since there are a lot of variables let us get the variables that have high correlation using a function that outputs the variables with correlation between them above a certain threshold.
+
+
+```{r}
+# Function to return highly correlated columns above a threshold
+correlation = function(dataset, threshold) {
+  numeric_cols = sapply(dataset, is.numeric)
+  numeric_dataset = dataset[, numeric_cols]
+  
+  col_corr = c()  # This vector stores the highly correlated columns
+  corr_matrix = cor(numeric_dataset, use = "pairwise.complete.obs")  # Correlation matrix
+  
+  # Traversing the correlation matrix
+  for (i in 1:(ncol(corr_matrix) - 1)) {
+    for (j in (i + 1):ncol(corr_matrix)) {
+      if (!is.na(corr_matrix[i, j]) && abs(corr_matrix[i, j]) > threshold) {
+        colname <- colnames(corr_matrix)[i]  # Selecting columns above threshold
+        col_corr <- c(col_corr, colname)  # Adding columns to vector
+      }
+    }
+  }
+  return(col_corr)
+}
+
+# Example usage
+highly_correlated_cols = correlation(df1, threshold = 0.7)
+print(highly_correlated_cols)
+
+
+```
+
+```{r}
+highly_correlated_cols = correlation(df1, threshold = 0.95)
+print(highly_correlated_cols)
+```
+
+
+# Implementing Algorithm
+
+```{r}
+# Storing the number of values in each class
+non_fraud_count = sum(df1$is_fraud == 0)
+fraud_count = sum(df1$is_fraud == 1)
+
+```
+
+```{r}
+# Storing the numerical columns of the data and removing unnecessary variables
+df_num = df1 %>% 
+  select_if(is.numeric) %>%
+  select(-c(zip, lat, long, city_pop, unix_time, merch_lat, merch_long))
+
+# To see the column names
+colnames(df_num)
+
+```
+
+```{r}
+summary(df_num)
+```
+
+```{r}
+# Save the df_num DataFrame to a CSV file named 'processed.csv'
+write.csv(df_num, file = 'processed.csv', row.names = FALSE)
+
+```
+
+
+```{r}
+dataset = read.csv("processed.csv")
+```
+
+- splitting the dataset
+```{r}
+set.seed(123)
+split = sample.split(dataset$is_fraud, SplitRatio = 0.75)
+training_set = subset(dataset, split == TRUE)
+test_set = subset(dataset, split == FALSE)
+```
+
+```{r}
+# Feature Scaling
+training_set[-2] = scale(training_set[-2])
+test_set[-2] = scale(test_set[-2])
+```
+
+
+**Implementing Logistic regression algorithm**
+
+```{r warning=FALSE}
+# Fitting Logistic Regression to the Training set
+classifier = glm(formula = is_fraud ~ .,
+                 family = binomial,
+                 data = training_set)
+```
+
+```{r}
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-2])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+```
+
+```{r}
+# Making the Confusion Matrix
+cm = table(test_set[, 2], y_pred > 0.5)
+print(cm)
+```
+
+```{r}
+# Calculate precision
+precision <- cm[2, 2] / sum(cm[, 2])
+
+# Calculate recall
+recall <- cm[2, 2] / sum(cm[2, ])
+
+# Calculate F1 score
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+# Calculate accuracy score
+accuracy <- sum(diag(cm)) / sum(cm)
+
+# Create a data frame for the metrics
+metrics_df <- data.frame(
+  Metric = c("Precision", "Recall", "F1 Score", "Accuracy"),
+  Value = c(precision, recall, f1_score, accuracy)
+)
+
+# Print the metrics table
+kable(metrics_df, format = "html", caption = "Evaluation Metrics For model_1")
+```
+
+- our accuracy is high but f1 score is Nan. this is because of the data imbalace proble, we have to deal with it.
+
+### Resampling technique (Over sampling)
+
+
+```{r}
+# Perform oversampling using ROSE
+oversampled_data = ovun.sample(is_fraud ~ ., data = dataset, method = "over", N = 2500000)$data
+
+# Check the class distribution after oversampling
+table(oversampled_data$is_fraud)
+
+```
+
+- splitting the dataset
+```{r}
+set.seed(123)
+split = sample.split(oversampled_data$is_fraud, SplitRatio = 0.75)
+training_set1 = subset(oversampled_data, split == TRUE)
+test_set1 = subset(oversampled_data, split == FALSE)
+```
+
+```{r}
+# Feature Scaling
+training_set1[-2] = scale(training_set1[-2])
+test_set1[-2] = scale(test_set1[-2])
+```
+
+
+- Fitting the model for Oversampled data
+```{r warning=FALSE}
+# Fitting Logistic Regression to the Training set
+classifier1 = glm(formula = is_fraud ~ .,
+                 family = binomial,
+                 data = training_set1)
+
+# Predicting the Test set results
+prob_pred = predict(classifier1, type = 'response', newdata = test_set1[-2])
+y_pred1 = ifelse(prob_pred > 0.5, 1, 0)
+```
+
+
+```{r}
+
+# Making the Confusion Matrix
+cm = table(test_set1[, 2], y_pred1 > 0.5)
+print(cm)
+
+# Calculate precision
+precision <- cm[2, 2] / sum(cm[, 2])
+
+# Calculate recall
+recall <- cm[2, 2] / sum(cm[2, ])
+
+# Calculate F1 score
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+# Calculate accuracy score
+accuracy <- sum(diag(cm)) / sum(cm)
+
+# Create a data frame for the metrics
+metrics_df <- data.frame(
+  Metric = c("Precision", "Recall", "F1 Score", "Accuracy"),
+  Value = c(precision, recall, f1_score, accuracy)
+)
+
+# Print the metrics table
+kable(metrics_df, format = "html", caption = "Evaluation Metrics after using Over Sampling")
+```
+
+### Resampling technique (Under sampling)
+
+```{r}
+# Perform oversampling using ROSE
+undersampled_data = ovun.sample(is_fraud ~ ., data = dataset, method = "under", N = 35000)$data
+
+# Check the class distribution after oversampling
+table(undersampled_data$is_fraud)
+
+```
+
+- splitting the dataset
+```{r}
+set.seed(123)
+split = sample.split(undersampled_data$is_fraud, SplitRatio = 0.75)
+training_set2 = subset(undersampled_data, split == TRUE)
+test_set2 = subset(undersampled_data, split == FALSE)
+```
+
+```{r}
+# Feature Scaling
+training_set2[-2] = scale(training_set2[-2])
+test_set2[-2] = scale(test_set2[-2])
+```
+
+
+- Fitting the model for Undersampled data
+```{r warning=FALSE}
+# Fitting Logistic Regression to the Training set
+classifier2 = glm(formula = is_fraud ~ .,
+                 family = binomial,
+                 data = training_set2)
+
+# Predicting the Test set results
+prob_pred = predict(classifier2, type = 'response', newdata = test_set2[-2])
+y_pred2 = ifelse(prob_pred > 0.5, 1, 0)
+```
+
+
+```{r}
+
+# Making the Confusion Matrix
+cm = table(test_set2[, 2], y_pred2 > 0.5)
+print(cm)
+
+# Calculate precision
+precision <- cm[2, 2] / sum(cm[, 2])
+
+# Calculate recall
+recall <- cm[2, 2] / sum(cm[2, ])
+
+# Calculate F1 score
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+# Calculate accuracy score
+accuracy <- sum(diag(cm)) / sum(cm)
+
+# Create a data frame for the metrics
+metrics_df <- data.frame(
+  Metric = c("Precision", "Recall", "F1 Score", "Accuracy"),
+  Value = c(precision, recall, f1_score, accuracy)
+)
+
+# Print the metrics table
+kable(metrics_df, format = "html", caption = "Evaluation Metrics after using Under Sampling")
+
+```
+
+# Conclusion
+
+**Out of three model, Logistic regression(with under sampling) is the best model.** 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
